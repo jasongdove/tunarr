@@ -1,6 +1,7 @@
 import { queryClient } from '@/queryClient';
 import useStore from '@/store';
 import {
+  clearCurrentCustomShow,
   moveProgramInCustomShow,
   resetCustomShowProgramming,
   setCustomShowProgramDirty,
@@ -109,7 +110,13 @@ export function EditCustomShowsForm({
         }),
         exact: true,
       });
-      setCustomShowProgramDirty(false);
+      if (isNew) {
+        await navigate({ to: '..' }).catch(console.error);
+        clearCurrentCustomShow();
+      } else {
+        updateCurrentCustomShow(updatedShow.data);
+        setCustomShowProgramDirty(false);
+      }
     },
   });
 

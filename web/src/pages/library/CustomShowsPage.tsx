@@ -26,6 +26,7 @@ import {
 } from 'material-react-table';
 import { useSnackbar } from 'notistack';
 import React, { useCallback, useMemo, useState } from 'react';
+import { RouterButtonLink } from '../../components/base/RouterButtonLink.tsx';
 import Breadcrumbs from '../../components/Breadcrumbs.tsx';
 import { deleteCustomShowMutation } from '../../generated/@tanstack/react-query.gen.ts';
 import { invalidateTaggedQueries } from '../../helpers/queryUtil.ts';
@@ -196,15 +197,14 @@ export default function CustomShowsPage() {
             tools will treat the videos as if they belonged to a single TV show.
           </Typography>
         </Box>
-        <Button
-          component={Link}
+        <RouterButtonLink
           to="/library/custom-shows/new"
           variant="contained"
           startIcon={<AddCircleIcon />}
           sx={{ alignSelf: 'end' }}
         >
           New
-        </Button>
+        </RouterButtonLink>
       </Box>
       <TableContainer component={Paper} sx={{ width: '100%' }}>
         <MaterialReactTable table={table} />
