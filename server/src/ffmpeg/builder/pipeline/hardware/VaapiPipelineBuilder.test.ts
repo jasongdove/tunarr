@@ -1,3 +1,4 @@
+import { ColorFormat } from '@/ffmpeg/builder/format/ColorFormat.js';
 import { TONEMAP_ENABLED, TUNARR_ENV_VARS } from '@/util/env.js';
 import { FileStreamSource } from '../../../../stream/types.ts';
 import { FfmpegCapabilities } from '../../capabilities/FfmpegCapabilities.ts';
@@ -12,9 +13,13 @@ import {
   ColorRanges,
   ColorSpaces,
   ColorTransferFormats,
+  VideoFormats,
 } from '../../constants.ts';
+import { PadFilter } from '../../filter/PadFilter.ts';
+import { ScaleVaapiFilter } from '../../filter/vaapi/ScaleVaapiFilter.ts';
 import {
   PixelFormatRgba,
+  PixelFormatUnknown,
   PixelFormatYuv420P,
   PixelFormatYuv420P10Le,
 } from '../../format/PixelFormat.ts';
@@ -38,7 +43,6 @@ import {
 import { FrameState } from '../../state/FrameState.ts';
 import { FrameSize } from '../../types.ts';
 import { VaapiPipelineBuilder } from './VaapiPipelineBuilder.ts';
-import { ColorFormat } from '@/ffmpeg/builder/format/ColorFormat.js';
 
 describe('VaapiPipelineBuilder', () => {
   test('should work', () => {
@@ -708,6 +712,7 @@ describe('VaapiPipelineBuilder tonemap', () => {
     videoStream: VideoStream;
     binaryCapabilities?: FfmpegCapabilities;
     disableHardwareFilters?: boolean;
+    disableHardwareDecoding?: boolean;
   }) {
     const capabilities = new VaapiHardwareCapabilities([
       new VaapiProfileEntrypoint(
@@ -759,6 +764,7 @@ describe('VaapiPipelineBuilder tonemap', () => {
         ...DefaultPipelineOptions,
         vaapiDevice: '/dev/dri/renderD128',
         disableHardwareFilters: opts.disableHardwareFilters ?? false,
+        disableHardwareDecoding: opts.disableHardwareDecoding ?? false,
       },
     );
 
@@ -1070,5 +1076,157 @@ describe('VaapiPipelineBuilder tonemap', () => {
     expect(hasTonemapFilter(pipeline)).to.eq(false);
     expect(hasOpenclTonemapFilter(pipeline)).to.eq(false);
     expect(hasSoftwareTonemapFilter(pipeline)).to.eq(true);
+  });
+
+  test('yuv420p10le input ensures outputted pixel format is 8-bit nv12', () => {
+    process.env[TONEMAP_ENABLED] = 'true';
+
+    const stream = VideoStream.create({
+      index: 0,
+      codec: VideoFormats.Hevc,
+      profile: 'main 10',
+      pixelFormat: new PixelFormatYuv420P10Le(),
+      frameSize: FrameSize.FourK,
+      displayAspectRatio: '16:9',
+      providedSampleAspectRatio: '1:1',
+      colorFormat: new ColorFormat({
+        colorRange: ColorRanges.Tv,
+        colorSpace: ColorSpaces.Bt2020nc,
+        colorPrimaries: ColorPrimaries.Bt2020,
+        colorTransfer: ColorTransferFormats.Smpte2084,
+      }),
+    });
+
+    const pipeline = buildWithTonemap({
+      videoStream: stream,
+    });
+
+    const padFilter = pipeline
+      .getComplexFilter()!
+      .filterChain.videoFilterSteps.find((step) => step instanceof PadFilter);
+    console.log(pipeline.getCommandArgs().join(' '));
+    expect(padFilter).toBeDefined();
+    expect(padFilter!.filter).toEqual(
+      'hwdownload,format=nv12,pad=1920:1080:-1:-1:color=black',
+    );
+  });
+
+  test('unknown pixel format properly wraps in nv12 after tonemapping', () => {
+    process.env[TONEMAP_ENABLED] = 'true';
+
+    const stream = VideoStream.create({
+      index: 0,
+      codec: VideoFormats.Hevc,
+      profile: 'main 10',
+      pixelFormat: PixelFormatUnknown(10),
+      frameSize: FrameSize.FourK,
+      displayAspectRatio: '16:9',
+      providedSampleAspectRatio: '1:1',
+      colorFormat: new ColorFormat({
+        colorRange: ColorRanges.Tv,
+        colorSpace: ColorSpaces.Bt2020nc,
+        colorPrimaries: ColorPrimaries.Bt2020,
+        colorTransfer: ColorTransferFormats.Smpte2084,
+      }),
+    });
+
+    const pipeline = buildWithTonemap({
+      videoStream: stream,
+    });
+
+    const padFilter = pipeline
+      .getComplexFilter()!
+      .filterChain.videoFilterSteps.find((step) => step instanceof PadFilter);
+    expect(padFilter).toBeDefined();
+    expect(padFilter!.filter).toEqual(
+      'hwdownload,format=nv12,pad=1920:1080:-1:-1:color=black',
+    );
+  });
+
+  test('tonemap_vaapi includes format upload prefix when frame data is in software (hardware decoding disabled)', () => {
+    process.env[TONEMAP_ENABLED] = 'true';
+
+    const pipeline = buildWithTonemap({
+      videoStream: createHdrVideoStream(),
+      disableHardwareDecoding: true,
+    });
+
+    const args = pipeline.getCommandArgs().join(' ');
+    expect(args).toContain(
+      'format=vaapi|nv12|p010le,tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709',
+    );
+  });
+
+  // This test also veries that software decode triggers a scale_vaapi because of the tonemap
+  // to ensure we don't excessively move frames from hardware <-> software
+  test('8-bit yuv420p HDR input preserves 8-bit pixel format inside nv12 after tonemapping (software decode)', () => {
+    process.env[TONEMAP_ENABLED] = 'true';
+
+    // Unusual but valid: 8-bit stream tagged with HDR color metadata
+    const stream = VideoStream.create({
+      index: 0,
+      codec: VideoFormats.Hevc,
+      // Explicitly trigger a software decode
+      profile: 'main',
+      pixelFormat: new PixelFormatYuv420P(),
+      frameSize: FrameSize.FourK,
+      displayAspectRatio: '16:9',
+      providedSampleAspectRatio: '1:1',
+      colorFormat: new ColorFormat({
+        colorRange: ColorRanges.Tv,
+        colorSpace: ColorSpaces.Bt2020nc,
+        colorPrimaries: ColorPrimaries.Bt2020,
+        colorTransfer: ColorTransferFormats.Smpte2084,
+      }),
+    });
+
+    const pipeline = buildWithTonemap({ videoStream: stream });
+
+    const filters = pipeline.getComplexFilter()!.filterChain.videoFilterSteps;
+    const padFilter = filters.find((step) => step instanceof PadFilter);
+    expect(padFilter).toBeDefined();
+    expect(padFilter!.filter).toEqual(
+      'hwdownload,format=nv12,pad=1920:1080:-1:-1:color=black',
+    );
+    const scaleFilter = filters.find(
+      (filter) => filter instanceof ScaleVaapiFilter,
+    );
+    expect(scaleFilter).toBeDefined();
+  });
+
+  // This test also veries that software decode triggers a scale_vaapi because of the tonemap
+  // to ensure we don't excessively move frames from hardware <-> software
+  test('8-bit yuv420p HDR input preserves 8-bit pixel format inside nv12 after tonemapping (hardware decode)', () => {
+    process.env[TONEMAP_ENABLED] = 'true';
+
+    // Unusual but valid: 8-bit stream tagged with HDR color metadata
+    const stream = VideoStream.create({
+      index: 0,
+      codec: VideoFormats.Hevc,
+      profile: 'main 10',
+      pixelFormat: new PixelFormatYuv420P(),
+      frameSize: FrameSize.FourK,
+      displayAspectRatio: '16:9',
+      providedSampleAspectRatio: '1:1',
+      colorFormat: new ColorFormat({
+        colorRange: ColorRanges.Tv,
+        colorSpace: ColorSpaces.Bt2020nc,
+        colorPrimaries: ColorPrimaries.Bt2020,
+        colorTransfer: ColorTransferFormats.Smpte2084,
+      }),
+    });
+
+    const pipeline = buildWithTonemap({ videoStream: stream });
+
+    const filters = pipeline.getComplexFilter()!.filterChain.videoFilterSteps;
+    const padFilter = filters.find((step) => step instanceof PadFilter);
+    expect(padFilter).toBeDefined();
+    expect(padFilter!.filter).toEqual(
+      'hwdownload,format=nv12,pad=1920:1080:-1:-1:color=black',
+    );
+    const scaleFilter = filters.find(
+      (filter) => filter instanceof ScaleVaapiFilter,
+    );
+    expect(scaleFilter).toBeDefined();
   });
 });

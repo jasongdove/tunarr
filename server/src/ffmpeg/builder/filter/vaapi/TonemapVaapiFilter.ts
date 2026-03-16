@@ -1,5 +1,9 @@
 import { FilterOption } from '@/ffmpeg/builder/filter/FilterOption.js';
-import { PixelFormatNv12 } from '@/ffmpeg/builder/format/PixelFormat.js';
+import {
+  PixelFormatNv12,
+  PixelFormatUnknown,
+  PixelFormatYuv420P,
+} from '@/ffmpeg/builder/format/PixelFormat.js';
 import type { FrameState } from '@/ffmpeg/builder/state/FrameState.js';
 import { FrameDataLocation } from '@/ffmpeg/builder/types.js';
 import { ColorFormat } from '../../format/ColorFormat.ts';
@@ -19,13 +23,15 @@ export class TonemapVaapiFilter extends FilterOption {
   public readonly affectsFrameState: boolean = true;
 
   nextState(currentState: FrameState): FrameState {
-    const currentPixelFormat = currentState.pixelFormat;
+    const currentPixelFormat = currentState.pixelFormat?.unwrap();
     return currentState.update({
       colorFormat: ColorFormat.bt709,
       frameDataLocation: FrameDataLocation.Hardware,
-      pixelFormat: currentPixelFormat
-        ? new PixelFormatNv12(currentPixelFormat)
-        : null,
+      pixelFormat: new PixelFormatNv12(
+        (currentPixelFormat && currentPixelFormat.bitDepth === 8
+          ? currentPixelFormat
+          : new PixelFormatYuv420P()) ?? PixelFormatUnknown(8),
+      ),
     });
   }
 }
