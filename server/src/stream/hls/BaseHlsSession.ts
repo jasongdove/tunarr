@@ -89,6 +89,11 @@ export abstract class BaseHlsSession<
     }
   }
 
+  override removeConnection(token: string) {
+    super.removeConnection(token);
+    this._minByIp.delete(token);
+  }
+
   protected abstract getHlsOptions(): DeepRequired<HlsOptions>;
 
   protected async initDirectories() {
