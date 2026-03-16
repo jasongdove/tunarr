@@ -217,8 +217,8 @@ export default function TimeSlotEditorPage() {
         },
       },
       {
-        onSuccess: () => {
-          reset();
+        onSuccess() {
+          reset(schedule, { keepDirty: false });
         },
       },
     );
