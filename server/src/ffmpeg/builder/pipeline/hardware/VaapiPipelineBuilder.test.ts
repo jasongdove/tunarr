@@ -16,6 +16,7 @@ import {
   VideoFormats,
 } from '../../constants.ts';
 import { PadFilter } from '../../filter/PadFilter.ts';
+import { PadVaapiFilter } from '../../filter/vaapi/PadVaapiFilter.ts';
 import { ScaleVaapiFilter } from '../../filter/vaapi/ScaleVaapiFilter.ts';
 import {
   PixelFormatRgba,
@@ -483,6 +484,21 @@ describe('VaapiPipelineBuilder pad', () => {
     isUnknown: false,
   };
 
+  // 16:9 FHD video that exactly fills the target: no padding needed
+  // squarePixelFrameSize(FHD) = 1920x1080 = paddedSize
+  function create169FhdVideoStream(): VideoStream {
+    return VideoStream.create({
+      index: 0,
+      codec: 'h264',
+      profile: 'main',
+      pixelFormat: new PixelFormatYuv420P(),
+      frameSize: FrameSize.FHD,
+      displayAspectRatio: '16:9',
+      providedSampleAspectRatio: '1:1',
+      colorFormat: null,
+    });
+  }
+
   // 4:3 video that needs pillarboxing to fit in 16:9 FHD:
   // squarePixelFrameSize(FHD) = 1440x1080, paddedSize = 1920x1080
   function create43VideoStream(): VideoStream {
@@ -667,6 +683,57 @@ describe('VaapiPipelineBuilder pad', () => {
     const args = pipeline.getCommandArgs().join(' ');
     expect(args).toContain('pad_vaapi=w=1920:h=1080');
     expect(args).not.toContain('pad=1920:1080');
+  });
+
+  test('skips pad filter when current paddedSize already equals desired paddedSize (pad_vaapi available)', () => {
+    // 16:9 FHD source fills the target frame exactly — no padding needed
+    const pipeline = buildWithPad({ videoStream: create169FhdVideoStream() });
+
+    const videoFilters =
+      pipeline.getComplexFilter()!.filterChain.videoFilterSteps;
+    expect(videoFilters.some((f) => f instanceof PadVaapiFilter)).toBe(false);
+    expect(videoFilters.some((f) => f instanceof PadFilter)).toBe(false);
+
+    const args = pipeline.getCommandArgs().join(' ');
+    expect(args).not.toContain('pad_vaapi');
+    expect(args).not.toContain('pad=');
+  });
+
+  test('skips pad filter when current paddedSize already equals desired paddedSize (no pad_vaapi capability)', () => {
+    const pipeline = buildWithPad({
+      videoStream: create169FhdVideoStream(),
+      binaryCapabilities: new FfmpegCapabilities(
+        new Set(),
+        new Map(),
+        new Set(),
+        new Set(),
+      ),
+    });
+
+    const videoFilters =
+      pipeline.getComplexFilter()!.filterChain.videoFilterSteps;
+    expect(videoFilters.some((f) => f instanceof PadVaapiFilter)).toBe(false);
+    expect(videoFilters.some((f) => f instanceof PadFilter)).toBe(false);
+
+    const args = pipeline.getCommandArgs().join(' ');
+    expect(args).not.toContain('pad_vaapi');
+    expect(args).not.toContain('pad=');
+  });
+
+  test('skips pad filter when current paddedSize already equals desired paddedSize (hardware decoding disabled)', () => {
+    const pipeline = buildWithPad({
+      videoStream: create169FhdVideoStream(),
+      disableHardwareDecoding: true,
+    });
+
+    const videoFilters =
+      pipeline.getComplexFilter()!.filterChain.videoFilterSteps;
+    expect(videoFilters.some((f) => f instanceof PadVaapiFilter)).toBe(false);
+    expect(videoFilters.some((f) => f instanceof PadFilter)).toBe(false);
+
+    const args = pipeline.getCommandArgs().join(' ');
+    expect(args).not.toContain('pad_vaapi');
+    expect(args).not.toContain('pad=');
   });
 });
 

@@ -439,7 +439,7 @@ export class VaapiPipelineBuilder extends SoftwarePipelineBuilder {
 
   protected setPad(currentState: FrameState) {
     if (
-      this.desiredState.croppedSize &&
+      this.desiredState.croppedSize ||
       currentState.paddedSize.equals(this.desiredState.paddedSize)
     ) {
       return currentState;
