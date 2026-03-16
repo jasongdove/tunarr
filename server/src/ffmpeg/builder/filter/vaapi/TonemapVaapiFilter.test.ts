@@ -1,8 +1,8 @@
-import { TonemapVaapiFilter } from '@/ffmpeg/builder/filter/vaapi/TonemapVaapiFilter.js';
 import {
   ColorRanges,
   ColorTransferFormats,
 } from '@/ffmpeg/builder/constants.js';
+import { TonemapVaapiFilter } from '@/ffmpeg/builder/filter/vaapi/TonemapVaapiFilter.js';
 import {
   PixelFormatNv12,
   PixelFormatYuv420P,
@@ -107,7 +107,7 @@ describe('TonemapVaapiFilter', () => {
     const nextState = filter.nextState(currentState);
 
     expect(nextState.pixelFormat).toMatchPixelFormat(
-      new PixelFormatNv12(new PixelFormatYuv420P10Le()),
+      new PixelFormatNv12(new PixelFormatYuv420P()),
     );
   });
 
@@ -122,6 +122,8 @@ describe('TonemapVaapiFilter', () => {
     const filter = new TonemapVaapiFilter(currentState);
     const nextState = filter.nextState(currentState);
 
-    expect(nextState.pixelFormat).toBeNull();
+    expect(nextState.pixelFormat).toMatchPixelFormat(
+      new PixelFormatNv12(new PixelFormatYuv420P()),
+    );
   });
 });

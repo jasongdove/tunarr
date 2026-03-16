@@ -95,6 +95,10 @@ export abstract class HardwarePixelFormat extends BasePixelFormat {
   equals(other: PixelFormat): boolean {
     return super.equals(other) && this.unwrap().equals(other.unwrap());
   }
+
+  prettyPrint() {
+    return `${this.constructor.name}(name=${this.name}, bitDepth=${this.bitDepth}, underlying=${this.underlying.prettyPrint()})`;
+  }
 }
 
 abstract class SoftwarePixelFormat extends BasePixelFormat {
