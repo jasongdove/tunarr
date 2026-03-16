@@ -4,7 +4,6 @@ import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
 import {
   filter,
-  findIndex,
   first,
   isEmpty,
   last,
@@ -202,16 +201,27 @@ export class HlsPlaylistMutator {
     const startSequence = first(allSegments)?.startSequence ?? 0;
 
     if (!isEmpty(allSegments)) {
-      const target = first(allSegments);
-      const index = target
-        ? findIndex(
-            items,
-            (item) => item.type === 'segment' && item.equals(target),
+      const firstSeg = first(allSegments)!;
+      const index = firstSeg
+        ? items.findIndex(
+            (item): item is PlaylistSegment =>
+              item.type === 'segment' && item.equals(firstSeg),
           )
         : -1;
-      discontinuitySequence += filter(take(items, index + 1), {
-        type: 'discontinuity',
-      }).length;
+      // Count only DISC tags before the first selected segment that will NOT
+      // be emitted as tags. A DISC is emitted when its next item is selected;
+      // counting it in the sequence number too would double-count it.
+      for (let i = 0; i < index; i++) {
+        if (items[i]!.type === 'discontinuity') {
+          const next = items[i + 1];
+          const nextIsSelected =
+            next?.type === 'segment' &&
+            allSegments.some((seg) => seg.equals(next));
+          if (!nextIsSelected) {
+            discontinuitySequence++;
+          }
+        }
+      }
     }
 
     const lines = [
@@ -226,16 +236,18 @@ export class HlsPlaylistMutator {
     for (let i = 0; i < items.length; i++) {
       const item = items[i]!;
       switch (item.type) {
-        case 'discontinuity':
-          if (
-            i === items.length - 1 ||
-            (allSegments as PlaylistLine[]).includes(items[i + 1]!)
-          ) {
+        case 'discontinuity': {
+          const next = items[i + 1];
+          const nextIsSelected =
+            next?.type === 'segment' &&
+            allSegments.some((seg) => seg.equals(next));
+          if (i === items.length - 1 || nextIsSelected) {
             lines.push('#EXT-X-DISCONTINUITY');
           }
           break;
+        }
         case 'segment':
-          if (allSegments.includes(item)) {
+          if (allSegments.some((seg) => seg.equals(item))) {
             lines.push(item.extInf);
             lines.push(
               `#EXT-X-PROGRAM-DATE-TIME:${item.startTime.format(

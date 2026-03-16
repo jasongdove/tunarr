@@ -475,6 +475,159 @@ describe('HlsPlaylistMutator', () => {
     });
   });
 
+  describe('discontinuity sequence calculation', () => {
+    // Playlist: 31 old-program segments (0–30), one DISC, 30 new-program
+    // segments (31–60). Total 61 segments, all numbered with 6 digits.
+    function createTransitionPlaylist(): string[] {
+      const lines = [
+        '#EXTM3U',
+        '#EXT-X-VERSION:3',
+        '#EXT-X-TARGETDURATION:4',
+        '#EXT-X-MEDIA-SEQUENCE:0',
+        '#EXT-X-DISCONTINUITY-SEQUENCE:0',
+      ];
+      for (let i = 0; i < 31; i++) {
+        lines.push(
+          '#EXTINF:4.004000,',
+          '#EXT-X-PROGRAM-DATE-TIME:2024-10-18T14:00:00.000-0400',
+          `/stream/channels/test-channel/hls/data${String(i).padStart(6, '0')}.ts`,
+        );
+      }
+      lines.push('#EXT-X-DISCONTINUITY');
+      for (let i = 31; i <= 60; i++) {
+        lines.push(
+          '#EXTINF:4.004000,',
+          '#EXT-X-PROGRAM-DATE-TIME:2024-10-18T14:02:04.000-0400',
+          `/stream/channels/test-channel/hls/data${String(i).padStart(6, '0')}.ts`,
+        );
+      }
+      return lines;
+    }
+
+    const start = dayjs('2024-10-18T14:00:00.000-0400');
+
+    function trimWithSegmentFilter(
+      segmentNumber: number,
+      segmentsToKeepBefore = 10,
+    ) {
+      return mutator.trimPlaylist(
+        start,
+        { type: 'before_segment_number', segmentNumber, segmentsToKeepBefore },
+        createTransitionPlaylist(),
+        { maxSegmentsToKeep: 20 },
+      );
+    }
+
+    function discSeq(playlist: string): number {
+      const m = playlist.match(/#EXT-X-DISCONTINUITY-SEQUENCE:(\d+)/);
+      return m ? parseInt(m[1]!) : -1;
+    }
+
+    function discTagCount(playlist: string): number {
+      return playlist.split('\n').filter((l) => l === '#EXT-X-DISCONTINUITY')
+        .length;
+    }
+
+    it('DISC in middle of selected window: disc-seq=0, DISC tag emitted', () => {
+      // minSeg = max(25-10, 0) = 15 → filtered segs 15..60 (46 >= 20) → take first 20 = segs 15..34
+      // DISC between seg30 and seg31; seg31 IS in window → tag emitted, no counting
+      const result = trimWithSegmentFilter(25);
+      expect(discSeq(result.playlist)).toBe(0);
+      expect(discTagCount(result.playlist)).toBe(1);
+    });
+
+    it('DISC immediately before first selected segment: disc-seq=0, DISC tag emitted (no double-count)', () => {
+      // minSeg = max(41-10, 0) = 31 → filtered segs 31..60 (30 >= 20) → take first 20 = segs 31..50
+      // DISC is immediately before seg31 (first selected segment)
+      // OLD (buggy) behaviour: disc-seq=1 AND DISC tag emitted → Kodi sees 2 discontinuities
+      // NEW (fixed) behaviour: disc-seq=0, DISC tag emitted → consistent with previous poll
+      const result = trimWithSegmentFilter(41);
+      expect(discSeq(result.playlist)).toBe(0);
+      expect(discTagCount(result.playlist)).toBe(1);
+    });
+
+    it('DISC before window with a gap: disc-seq=1, DISC tag NOT emitted', () => {
+      // minSeg = max(45-10, 0) = 35 → filtered segs 35..60 (26 >= 20) → take first 20 = segs 35..54
+      // DISC before seg31; seg31 not in window → DISC counted in sequence, not emitted
+      const result = trimWithSegmentFilter(45);
+      expect(discSeq(result.playlist)).toBe(1);
+      expect(discTagCount(result.playlist)).toBe(0);
+    });
+
+    it('disc-seq is monotonically non-decreasing as the DISC rolls off the window', () => {
+      // Simulates three consecutive playlist polls as the client advances
+      const poll1 = trimWithSegmentFilter(25); // DISC in middle
+      const poll2 = trimWithSegmentFilter(41); // DISC at boundary (first selected)
+      const poll3 = trimWithSegmentFilter(45); // DISC before window with gap
+
+      const seq1 = discSeq(poll1.playlist);
+      const seq2 = discSeq(poll2.playlist);
+      const seq3 = discSeq(poll3.playlist);
+
+      expect(seq1).toBe(0);
+      expect(seq2).toBe(0); // key assertion: must NOT jump to 1 here
+      expect(seq3).toBe(1);
+      expect(seq2).toBeGreaterThanOrEqual(seq1);
+      expect(seq3).toBeGreaterThanOrEqual(seq2);
+    });
+
+    it('multiple DISCs: pre-window one counted, boundary one emitted but not counted', () => {
+      // Three programs:
+      //   prog1: segs 0–14  (15 segs)
+      //   DISC1
+      //   prog2: segs 15–29 (15 segs)
+      //   DISC2
+      //   prog3: segs 30–60 (31 segs)
+      const lines = [
+        '#EXTM3U',
+        '#EXT-X-VERSION:3',
+        '#EXT-X-TARGETDURATION:4',
+        '#EXT-X-MEDIA-SEQUENCE:0',
+        '#EXT-X-DISCONTINUITY-SEQUENCE:0',
+      ];
+      for (let i = 0; i < 15; i++) {
+        lines.push(
+          '#EXTINF:4.004000,',
+          '#EXT-X-PROGRAM-DATE-TIME:2024-10-18T14:00:00.000-0400',
+          `/stream/channels/test-channel/hls/data${String(i).padStart(6, '0')}.ts`,
+        );
+      }
+      lines.push('#EXT-X-DISCONTINUITY');
+      for (let i = 15; i < 30; i++) {
+        lines.push(
+          '#EXTINF:4.004000,',
+          '#EXT-X-PROGRAM-DATE-TIME:2024-10-18T14:01:00.000-0400',
+          `/stream/channels/test-channel/hls/data${String(i).padStart(6, '0')}.ts`,
+        );
+      }
+      lines.push('#EXT-X-DISCONTINUITY');
+      for (let i = 30; i <= 60; i++) {
+        lines.push(
+          '#EXTINF:4.004000,',
+          '#EXT-X-PROGRAM-DATE-TIME:2024-10-18T14:02:00.000-0400',
+          `/stream/channels/test-channel/hls/data${String(i).padStart(6, '0')}.ts`,
+        );
+      }
+
+      // minSeg = max(40-10, 0) = 30 → filtered segs 30..60 (31 >= 20) → take first 20 = segs 30..49
+      // DISC1: next item after it is seg15, not in window [30..49] → counted in disc-seq (+1)
+      // DISC2: next item after it is seg30, IS in window → emitted, not counted
+      const result = mutator.trimPlaylist(
+        start,
+        {
+          type: 'before_segment_number',
+          segmentNumber: 40,
+          segmentsToKeepBefore: 10,
+        },
+        lines,
+        { maxSegmentsToKeep: 20 },
+      );
+
+      expect(discSeq(result.playlist)).toBe(1); // only DISC1 counted
+      expect(discTagCount(result.playlist)).toBe(1); // only DISC2 emitted
+    });
+  });
+
   describe('integration with real test file', () => {
     it('should parse and trim the test.m3u8 file', async () => {
       const lines = (await readTestFile('test.m3u8'))
