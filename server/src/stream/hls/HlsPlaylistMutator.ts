@@ -4,8 +4,8 @@ import type { Dayjs } from 'dayjs';
 import dayjs from 'dayjs';
 import {
   filter,
+  findIndex,
   first,
-  indexOf,
   isEmpty,
   last,
   merge,
@@ -202,7 +202,13 @@ export class HlsPlaylistMutator {
     const startSequence = first(allSegments)?.startSequence ?? 0;
 
     if (!isEmpty(allSegments)) {
-      const index = indexOf(items, first(allSegments));
+      const target = first(allSegments);
+      const index = target
+        ? findIndex(
+            items,
+            (item) => item.type === 'segment' && item.equals(target),
+          )
+        : -1;
       discontinuitySequence += filter(take(items, index + 1), {
         type: 'discontinuity',
       }).length;
@@ -266,6 +272,15 @@ class PlaylistSegment {
     const matches = this.line.match(/[A-z/]+(\d+)\.(ts|mp4)/);
     const match = nth(matches, 1);
     return match ? parseInt(match) : null;
+  }
+
+  equals(other: PlaylistSegment) {
+    return (
+      this === other ||
+      (this.startTime.isSame(other.startTime) &&
+        this.extInf === other.extInf &&
+        this.line === other.line)
+    );
   }
 }
 

@@ -1,6 +1,7 @@
 import { HardwareAccelerationMode } from '@/db/schema/TranscodeConfig.js';
 import type { FfmpegVersionResult } from '@/ffmpeg/ffmpegInfo.js';
 import type { DataProps, Maybe, Nullable } from '@/types/util.js';
+import type { TupleToUnion } from '@tunarr/types';
 import type { FfmpegLogLevel } from '@tunarr/types/schemas';
 import type { Duration } from 'dayjs/plugin/duration.js';
 import { merge } from 'lodash-es';
@@ -13,6 +14,15 @@ import {
   OutputLocation,
 } from '../constants.ts';
 
+export const VaapiTonemapType = ['vaapi', 'opencl'] as const;
+export type VaapiTonemapType = TupleToUnion<typeof VaapiTonemapType>;
+
+export type VaapiPipelineOptions = {
+  // Ordered list of preferred tonemap types. Pipeline will cross
+  // reference the list based on what is available on the system.
+  tonemapPreference: VaapiTonemapType;
+};
+
 export type PipelineOptions = {
   decoderThreadCount: Nullable<number>;
   encoderThreadCount: Nullable<number>;
@@ -20,8 +30,11 @@ export type PipelineOptions = {
   disableHardwareDecoding?: boolean;
   disableHardwareEncoding?: boolean;
   disableHardwareFilters?: boolean;
+  // TODO: Move these into the vaapi pipeline options
   vaapiDevice: Nullable<string>;
   vaapiDriver: Nullable<string>;
+  // VAAPI
+  vaapiPipelineOptions: Nullable<VaapiPipelineOptions>;
 };
 
 export const DefaultPipelineOptions: PipelineOptions = {
@@ -33,6 +46,9 @@ export const DefaultPipelineOptions: PipelineOptions = {
   disableHardwareFilters: false,
   vaapiDevice: null,
   vaapiDriver: null,
+  vaapiPipelineOptions: {
+    tonemapPreference: 'opencl',
+  },
 };
 
 export const DefaultFfmpegState: Partial<DataProps<FfmpegState>> = {

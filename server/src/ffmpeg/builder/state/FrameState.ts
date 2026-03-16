@@ -34,6 +34,11 @@ export const DefaultFrameState: Omit<
   infiniteLoop: false,
 };
 
+export type FrameStateOpts = MarkOptional<
+  FrameStateFields,
+  keyof typeof DefaultFrameState
+>;
+
 export class FrameState {
   scaledSize: FrameSize;
   paddedSize: FrameSize;
@@ -55,9 +60,7 @@ export class FrameState {
 
   forceSoftwareOverlay = false;
 
-  constructor(
-    fields: MarkOptional<FrameStateFields, keyof typeof DefaultFrameState>,
-  ) {
+  constructor(fields: FrameStateOpts) {
     merge(this, DefaultFrameState, fields);
   }
 

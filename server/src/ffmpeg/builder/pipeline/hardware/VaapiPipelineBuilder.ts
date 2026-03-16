@@ -62,6 +62,7 @@ import {
   PixelFormats,
 } from '../../format/PixelFormat.ts';
 import type { SubtitlesInputSource } from '../../input/SubtitlesInputSource.ts';
+import type { VideoStream } from '../../MediaStream.ts';
 import { CopyTimestampInputOption } from '../../options/input/CopyTimestampInputOption.ts';
 import {
   NoAutoScaleOutputOption,
@@ -356,21 +357,29 @@ export class VaapiPipelineBuilder extends SoftwarePipelineBuilder {
 
     const { videoStream, pipelineOptions } = this.context;
 
-    if (
-      !getBooleanEnvVar(TONEMAP_ENABLED, false) ||
-      !isHdrContent(videoStream)
-    ) {
+    if (!this.shouldPerformTonemap(videoStream)) {
       return currentState;
     }
 
     let filter: FilterOption | undefined;
     if (!pipelineOptions.disableHardwareFilters) {
-      if (this.ffmpegCapabilities.hasFilter(KnownFfmpegFilters.TonemapVaapi)) {
-        filter = new TonemapVaapiFilter(currentState);
-      } else if (
-        this.ffmpegCapabilities.hasFilter(KnownFfmpegFilters.TonemapOpencl)
-      ) {
+      let preference = pipelineOptions.vaapiPipelineOptions?.tonemapPreference;
+      const hasOpencl = this.ffmpegCapabilities.hasFilter(
+        KnownFfmpegFilters.TonemapOpencl,
+      );
+      const hasVaapi = this.ffmpegCapabilities.hasFilter(
+        KnownFfmpegFilters.TonemapVaapi,
+      );
+
+      // Default preference is opencl.
+      if (!preference) {
+        preference = 'opencl';
+      }
+
+      if (preference === 'opencl' && hasOpencl) {
         filter = new TonemapOpenclFilter(currentState);
+      } else if (preference === 'vaapi' && hasVaapi) {
+        filter = new TonemapVaapiFilter(currentState);
       }
     }
 
@@ -385,15 +394,26 @@ export class VaapiPipelineBuilder extends SoftwarePipelineBuilder {
   }
 
   protected setScale(currentState: FrameState): FrameState {
+    if (!isVideoPipelineContext(this.context)) {
+      return currentState;
+    }
     let nextState = currentState;
-    const { desiredState, ffmpegState, shouldDeinterlace } = this.context;
+
+    const { desiredState, ffmpegState, shouldDeinterlace, videoStream } =
+      this.context;
+
     let scaleOption: FilterOption;
     if (
       !currentState.scaledSize.equals(desiredState.scaledSize) &&
       ((ffmpegState.decoderHwAccelMode === HardwareAccelerationMode.None &&
         ffmpegState.encoderHwAccelMode === HardwareAccelerationMode.None &&
         !shouldDeinterlace) ||
-        ffmpegState.decoderHwAccelMode !== HardwareAccelerationMode.Vaapi)
+        // Software decode and no tonemap implies we're already in software. If we're tonemapping but
+        // performed a software decode, we'll have had to upload to hardware to tonemap anyway (most likely)
+        // so try to continue on hardware if possible
+        (ffmpegState.decoderHwAccelMode !== HardwareAccelerationMode.Vaapi &&
+          !this.shouldPerformTonemap(videoStream) &&
+          this.canTonemapOnHardware()))
     ) {
       scaleOption = ScaleFilter.create(
         currentState,
@@ -428,7 +448,7 @@ export class VaapiPipelineBuilder extends SoftwarePipelineBuilder {
 
   protected setPad(currentState: FrameState) {
     if (
-      this.desiredState.croppedSize &&
+      this.desiredState.croppedSize ||
       currentState.paddedSize.equals(this.desiredState.paddedSize)
     ) {
       return currentState;
@@ -611,6 +631,20 @@ export class VaapiPipelineBuilder extends SoftwarePipelineBuilder {
         this.ffmpegState.encoderHwAccelMode ===
           HardwareAccelerationMode.Vaapi) &&
       !(this.ffmpegState.vaapiDriver ?? '').toLowerCase().startsWith('radeon')
+    );
+  }
+
+  private shouldPerformTonemap(videoStream: VideoStream) {
+    return (
+      getBooleanEnvVar(TONEMAP_ENABLED, false) && isHdrContent(videoStream)
+    );
+  }
+
+  private canTonemapOnHardware() {
+    return (
+      !this.context.pipelineOptions.disableHardwareFilters &&
+      (this.ffmpegCapabilities.hasFilter(KnownFfmpegFilters.TonemapVaapi) ||
+        this.ffmpegCapabilities.hasFilter(KnownFfmpegFilters.TonemapOpencl))
     );
   }
 }
