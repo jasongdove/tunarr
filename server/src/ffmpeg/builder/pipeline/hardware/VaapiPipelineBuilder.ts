@@ -71,8 +71,6 @@ import {
 import { FrameDataLocation, RateControlMode } from '../../types.ts';
 
 export class VaapiPipelineBuilder extends SoftwarePipelineBuilder {
-  private usedHardwareTonemap: boolean = false;
-
   constructor(
     private hardwareCapabilities: BaseFfmpegHardwareCapabilities,
     binaryCapabilities: FfmpegCapabilities,
@@ -365,12 +363,23 @@ export class VaapiPipelineBuilder extends SoftwarePipelineBuilder {
 
     let filter: FilterOption | undefined;
     if (!pipelineOptions.disableHardwareFilters) {
-      if (this.ffmpegCapabilities.hasFilter(KnownFfmpegFilters.TonemapVaapi)) {
-        filter = new TonemapVaapiFilter(currentState);
-      } else if (
-        this.ffmpegCapabilities.hasFilter(KnownFfmpegFilters.TonemapOpencl)
-      ) {
+      let preference = pipelineOptions.vaapiPipelineOptions?.tonemapPreference;
+      const hasOpencl = this.ffmpegCapabilities.hasFilter(
+        KnownFfmpegFilters.TonemapOpencl,
+      );
+      const hasVaapi = this.ffmpegCapabilities.hasFilter(
+        KnownFfmpegFilters.TonemapVaapi,
+      );
+
+      // Default preference is opencl.
+      if (!preference) {
+        preference = 'opencl';
+      }
+
+      if (preference === 'opencl' && hasOpencl) {
         filter = new TonemapOpenclFilter(currentState);
+      } else if (preference === 'vaapi' && hasVaapi) {
+        filter = new TonemapVaapiFilter(currentState);
       }
     }
 
