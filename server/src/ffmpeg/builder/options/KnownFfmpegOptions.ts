@@ -12,4 +12,5 @@ export const KnownFfmpegFilters = {
   Libplacebo: 'libplacebo',
   PadVaapi: 'pad_vaapi',
   PadOpencl: 'pad_opencl',
+  OverlayQsv: 'overlay_qsv',
 };

@@ -15,10 +15,14 @@ import {
   ColorSpaces,
   ColorTransferFormats,
 } from '../../constants.ts';
+import { HardwareDownloadFilter } from '../../filter/HardwareDownloadFilter.ts';
 import { HardwareUploadQsvFilter } from '../../filter/qsv/HardwareUploadQsvFilter.ts';
 import { QsvFormatFilter } from '../../filter/qsv/QsvFormatFilter.ts';
 import { TonemapQsvFilter } from '../../filter/qsv/TonemapQsvFilter.ts';
 import { TonemapFilter } from '../../filter/TonemapFilter.ts';
+import { OverlayWatermarkFilter } from '../../filter/watermark/OverlayWatermarkFilter.ts';
+import { WatermarkOpacityFilter } from '../../filter/watermark/WatermarkOpacityFilter.ts';
+import { WatermarkScaleFilter } from '../../filter/watermark/WatermarkScaleFilter.ts';
 import { ColorFormat } from '../../format/ColorFormat.ts';
 import {
   PixelFormatYuv420P,
@@ -36,6 +40,7 @@ import {
 import {
   DefaultPipelineOptions,
   FfmpegState,
+  PipelineOptions,
 } from '../../state/FfmpegState.ts';
 import { FrameState } from '../../state/FrameState.ts';
 import { FrameSize } from '../../types.ts';
@@ -753,6 +758,268 @@ describe('QsvPipelineBuilder', () => {
       expect(tonemapFilter?.filter).toContain(
         `tin=${ColorTransferFormats.Smpte2084}`,
       );
+    });
+  });
+
+  describe('watermark', () => {
+    const ffmpegVersion = {
+      versionString: 'n7.0.2-15-g0458a86656-20240904',
+      majorVersion: 7,
+      minorVersion: 0,
+      patchVersion: 2,
+      isUnknown: false,
+    } as const;
+
+    // H264 with both decode and encode capabilities — frame goes to hardware
+    const fullCapabilities = new VaapiHardwareCapabilities([
+      new VaapiProfileEntrypoint(
+        VaapiProfiles.H264Main,
+        VaapiEntrypoint.Decode,
+      ),
+      new VaapiProfileEntrypoint(
+        VaapiProfiles.H264Main,
+        VaapiEntrypoint.Encode,
+      ),
+    ]);
+
+    function makeH264VideoInput() {
+      return VideoInputSource.withStream(
+        new FileStreamSource('/path/to/video.mkv'),
+        VideoStream.create({
+          codec: 'h264',
+          profile: 'main',
+          displayAspectRatio: '16:9',
+          frameSize: FrameSize.FHD,
+          index: 0,
+          pixelFormat: new PixelFormatYuv420P(),
+          // SAR 1:1 means non-anamorphic: squarePixelFrameSize(FHD) == FHD,
+          // so no scaling or padding is needed. The frame stays on hardware
+          // from the QSV decoder until the watermark path.
+          providedSampleAspectRatio: '1:1',
+          colorFormat: ColorFormat.unknown,
+        }),
+      );
+    }
+
+    function makeWatermarkSource(overrides: Partial<Watermark> = {}) {
+      return new WatermarkInputSource(
+        new FileStreamSource('/path/to/watermark.png'),
+        StillImageStream.create({
+          frameSize: FrameSize.withDimensions(100, 100),
+          index: 1,
+        }),
+        {
+          duration: 0,
+          enabled: true,
+          horizontalMargin: 5,
+          opacity: 100,
+          position: 'bottom-right',
+          verticalMargin: 5,
+          width: 10,
+          ...overrides,
+        } satisfies Watermark,
+      );
+    }
+
+    function buildPipeline(opts: {
+      videoInput?: VideoInputSource;
+      watermark?: WatermarkInputSource | null;
+      capabilities?: VaapiHardwareCapabilities;
+      pipelineOptions?: Partial<PipelineOptions>;
+    }) {
+      const video = opts.videoInput ?? makeH264VideoInput();
+      const builder = new QsvPipelineBuilder(
+        opts.capabilities ?? fullCapabilities,
+        EmptyFfmpegCapabilities,
+        video,
+        null,
+        null,
+        opts.watermark ?? null,
+        null,
+      );
+      return builder.build(
+        FfmpegState.create({ version: ffmpegVersion }),
+        new FrameState({
+          isAnamorphic: false,
+          scaledSize: video.streams[0]!.squarePixelFrameSize(FrameSize.FHD),
+          paddedSize: FrameSize.FHD,
+          pixelFormat: new PixelFormatYuv420P(),
+        }),
+        { ...DefaultPipelineOptions, ...(opts.pipelineOptions ?? {}) },
+      );
+    }
+
+    test('downloads frame from hardware before applying watermark overlay', () => {
+      const pipeline = buildPipeline({ watermark: makeWatermarkSource() });
+
+      const videoFilterSteps =
+        pipeline.getComplexFilter()!.filterChain.videoFilterSteps;
+
+      const hwDownloadIdx = videoFilterSteps.findIndex(
+        (s) => s instanceof HardwareDownloadFilter,
+      );
+      expect(
+        hwDownloadIdx,
+        'hwdownload filter should be present',
+      ).toBeGreaterThan(-1);
+
+      // OverlayWatermarkFilter lives in watermarkOverlayFilterSteps, not
+      // videoFilterSteps, so confirming the download happened is sufficient here.
+      const overlaySteps =
+        pipeline.getComplexFilter()!.filterChain.watermarkOverlayFilterSteps;
+      expect(
+        overlaySteps.some((s) => s instanceof OverlayWatermarkFilter),
+        'overlay filter should be present',
+      ).toBe(true);
+
+      // hwdownload must precede the overlay in the serialised args
+      const args = pipeline.getCommandArgs().join(' ');
+      expect(args.indexOf('hwdownload')).toBeLessThan(args.indexOf('overlay='));
+    });
+
+    test('does not insert hwdownload before watermark when frame is on software (hardware decoding disabled)', () => {
+      const pipeline = buildPipeline({
+        watermark: makeWatermarkSource(),
+        pipelineOptions: { disableHardwareDecoding: true },
+      });
+
+      const videoFilterSteps =
+        pipeline.getComplexFilter()!.filterChain.videoFilterSteps;
+
+      // No separate HardwareDownloadFilter should appear in videoFilterSteps —
+      // the frame is on software the whole time, so there is nothing to download
+      // before the watermark overlay.
+      expect(
+        videoFilterSteps.some((s) => s instanceof HardwareDownloadFilter),
+      ).toBe(false);
+
+      // The overlay should still be applied
+      const overlaySteps =
+        pipeline.getComplexFilter()!.filterChain.watermarkOverlayFilterSteps;
+      expect(
+        overlaySteps.some((s) => s instanceof OverlayWatermarkFilter),
+      ).toBe(true);
+
+      // The overlay appears in the args
+      const args = pipeline.getCommandArgs().join(' ');
+      expect(args).toContain('overlay=');
+    });
+
+    test('scales the watermark image relative to the video resolution', () => {
+      // width=10 means the watermark should be scaled to 10% of 1920px = 192px
+      const pipeline = buildPipeline({
+        watermark: makeWatermarkSource({ width: 10 }),
+      });
+
+      const args = pipeline.getCommandArgs().join(' ');
+      expect(args).toContain('scale=192:-1');
+    });
+
+    test('does not add a scale filter when fixedSize is true', () => {
+      const pipeline = buildPipeline({
+        watermark: makeWatermarkSource({ fixedSize: true }),
+      });
+
+      const args = pipeline.getCommandArgs().join(' ');
+      // WatermarkScaleFilter produces "scale=<w>:-1"; should be absent
+      expect(args).not.toMatch(/scale=\d+:-1/);
+    });
+
+    test('adds opacity filter when opacity is less than 100', () => {
+      const pipeline = buildPipeline({
+        watermark: makeWatermarkSource({ opacity: 50 }),
+      });
+
+      // WatermarkOpacityFilter renders as "colorchannelmixer=aa=0.5"
+      const args = pipeline.getCommandArgs().join(' ');
+      expect(args).toContain('colorchannelmixer=aa=0.5');
+    });
+
+    test('does not add opacity filter when opacity is 100', () => {
+      const pipeline = buildPipeline({
+        watermark: makeWatermarkSource({ opacity: 100 }),
+      });
+
+      const args = pipeline.getCommandArgs().join(' ');
+      expect(args).not.toContain('colorchannelmixer=aa=');
+    });
+
+    test('overlay filter includes time-based enable clause when duration > 0', () => {
+      const pipeline = buildPipeline({
+        watermark: makeWatermarkSource({ duration: 30 }),
+      });
+
+      const overlaySteps =
+        pipeline.getComplexFilter()!.filterChain.watermarkOverlayFilterSteps;
+      const overlay = overlaySteps.find(
+        (s) => s instanceof OverlayWatermarkFilter,
+      ) as OverlayWatermarkFilter | undefined;
+
+      expect(overlay).toBeDefined();
+      expect(overlay!.filter).toContain("enable='between(t,0,30)'");
+    });
+
+    test('overlay filter has no enable clause when duration is 0', () => {
+      const pipeline = buildPipeline({
+        watermark: makeWatermarkSource({ duration: 0 }),
+      });
+
+      const overlaySteps =
+        pipeline.getComplexFilter()!.filterChain.watermarkOverlayFilterSteps;
+      const overlay = overlaySteps.find(
+        (s) => s instanceof OverlayWatermarkFilter,
+      ) as OverlayWatermarkFilter | undefined;
+
+      expect(overlay).toBeDefined();
+      expect(overlay!.filter).not.toContain('enable=');
+    });
+
+    test('places overlay at the bottom-right position', () => {
+      // horizontalMargin=5 → x = round(5/100 * 1920) = 96
+      // verticalMargin=5   → y = round(5/100 * 1080) = 54
+      const pipeline = buildPipeline({
+        watermark: makeWatermarkSource({
+          position: 'bottom-right',
+          horizontalMargin: 5,
+          verticalMargin: 5,
+        }),
+      });
+
+      const args = pipeline.getCommandArgs().join(' ');
+      expect(args).toContain('x=W-w-96:y=H-h-54');
+    });
+
+    test('places overlay at the top-left position', () => {
+      const pipeline = buildPipeline({
+        watermark: makeWatermarkSource({
+          position: 'top-left',
+          horizontalMargin: 5,
+          verticalMargin: 5,
+        }),
+      });
+
+      const args = pipeline.getCommandArgs().join(' ');
+      expect(args).toContain('x=96:y=54');
+    });
+
+    test('produces no watermark filters when watermarkInputSource is null', () => {
+      const pipeline = buildPipeline({ watermark: null });
+
+      const overlaySteps =
+        pipeline.getComplexFilter()?.filterChain.watermarkOverlayFilterSteps ??
+        [];
+      expect(overlaySteps).toHaveLength(0);
+
+      const args = pipeline.getCommandArgs().join(' ');
+      expect(args).not.toContain('overlay=');
+    });
+
+    test('always converts watermark to yuva420p pixel format', () => {
+      const pipeline = buildPipeline({ watermark: makeWatermarkSource() });
+
+      const args = pipeline.getCommandArgs().join(' ');
+      // PixelFormatFilter(yuva420p) is always pushed to the watermark filter steps
+      expect(args).toContain('format=yuva420p');
     });
   });
 

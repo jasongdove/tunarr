@@ -1,7 +1,10 @@
 import { ColorFormat } from '@/ffmpeg/builder/format/ColorFormat.js';
 import { TONEMAP_ENABLED, TUNARR_ENV_VARS } from '@/util/env.js';
 import { FileStreamSource } from '../../../../stream/types.ts';
-import { FfmpegCapabilities } from '../../capabilities/FfmpegCapabilities.ts';
+import {
+  EmptyFfmpegCapabilities,
+  FfmpegCapabilities,
+} from '../../capabilities/FfmpegCapabilities.ts';
 import {
   VaapiEntrypoint,
   VaapiHardwareCapabilities,
@@ -9,6 +12,7 @@ import {
   VaapiProfiles,
 } from '../../capabilities/VaapiHardwareCapabilities.ts';
 import {
+  AudioFormats,
   ColorPrimaries,
   ColorRanges,
   ColorSpaces,
@@ -25,7 +29,11 @@ import {
   PixelFormatYuv420P,
   PixelFormatYuv420P10Le,
 } from '../../format/PixelFormat.ts';
-import { AudioInputSource } from '../../input/AudioInputSource.ts';
+import {
+  AudioInputFilterSource,
+  AudioInputSource,
+} from '../../input/AudioInputSource.ts';
+import { LavfiVideoInputSource } from '../../input/LavfiVideoInputSource.ts';
 import { SubtitlesInputSource } from '../../input/SubtitlesInputSource.ts';
 import { VideoInputSource } from '../../input/VideoInputSource.ts';
 import { WatermarkInputSource } from '../../input/WatermarkInputSource.ts';
@@ -1356,5 +1364,89 @@ describe('VaapiPipelineBuilder tonemap', () => {
       (filter) => filter instanceof ScaleVaapiFilter,
     );
     expect(scaleFilter).toBeDefined();
+  });
+
+  describe('still image stream', () => {
+    test('correct produces pipeline for error image', () => {
+      const stream = StillImageStream.create({
+        index: 0,
+        pixelFormat: PixelFormatUnknown(8),
+        frameSize: FrameSize.FourK,
+      });
+
+      const capabilities = new VaapiHardwareCapabilities([
+        new VaapiProfileEntrypoint(
+          VaapiProfiles.H264Main,
+          VaapiEntrypoint.Decode,
+        ),
+        new VaapiProfileEntrypoint(
+          VaapiProfiles.H264Main,
+          VaapiEntrypoint.Encode,
+        ),
+      ]);
+
+      const audioState = AudioState.create({
+        audioEncoder: AudioFormats.Ac3,
+        audioChannels: 6,
+        audioBitrate: 192,
+        audioBufferSize: 384,
+        audioSampleRate: 48,
+        audioVolume: 100,
+        // Check if audio and video are coming from same location
+        // audioDuration: duration.asMilliseconds(),
+      });
+
+      const pipeline = new VaapiPipelineBuilder(
+        capabilities,
+        EmptyFfmpegCapabilities,
+        // VideoInputSource.withStream(
+        //   new HttpStreamSource(
+        //     'http://localhost:8000/images/generic-error-screen.png',
+        //   ),
+        //   stream,
+        // ),
+        LavfiVideoInputSource.errorText(
+          FrameSize.FHD,
+          'Error',
+          'There was an error',
+        ),
+        AudioInputFilterSource.noise(audioState),
+        null,
+        null,
+        null,
+      );
+
+      const builtPipeline = pipeline.build(
+        FfmpegState.create({
+          version: {
+            versionString: 'n7.1.1-56-gc2184b65d2-20250716',
+            majorVersion: 7,
+            minorVersion: 1,
+            patchVersion: 1,
+            versionDetails: '56-gc2184b65d2-20250716',
+            isUnknown: false,
+          },
+          vaapiDevice: '/dev/dri/renderD128',
+        }),
+        new FrameState({
+          scaledSize: stream.squarePixelFrameSize(FrameSize.FHD),
+          paddedSize: FrameSize.FourK,
+          isAnamorphic: false,
+          realtime: true,
+          videoFormat: VideoFormats.H264,
+          frameRate: 24,
+          videoTrackTimescale: 90000,
+          videoBitrate: 4_000,
+          videoBufferSize: 8_000,
+          deinterlace: false,
+          pixelFormat: new PixelFormatYuv420P(),
+          colorFormat: ColorFormat.unknown,
+          infiniteLoop: false,
+        }),
+        DefaultPipelineOptions,
+      );
+
+      console.log(builtPipeline.getCommandArgs().join(' '));
+    });
   });
 });

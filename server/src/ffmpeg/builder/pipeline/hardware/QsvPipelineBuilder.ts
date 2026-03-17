@@ -128,10 +128,7 @@ export class QsvPipelineBuilder extends SoftwarePipelineBuilder {
     let decoder: Nullable<Decoder> = null;
 
     if (ffmpegState.decoderHwAccelMode === HardwareAccelerationMode.Qsv) {
-      decoder = DecoderFactory.getQsvDecoder(
-        videoStream,
-        this.hardwareCapabilities,
-      );
+      decoder = DecoderFactory.getQsvDecoder(videoStream);
       if (!isNull(decoder)) {
         this.videoInputSource.addOption(decoder);
       }
@@ -208,7 +205,7 @@ export class QsvPipelineBuilder extends SoftwarePipelineBuilder {
       this.videoInputSource.filterSteps.push(hwDownload);
     }
 
-    this.setWatermark(currentState);
+    currentState = this.setWatermark(currentState);
 
     const noEncoderSteps = every(
       this.getEncoderSteps(),
@@ -323,12 +320,12 @@ export class QsvPipelineBuilder extends SoftwarePipelineBuilder {
     const steps: FilterOption[] = [];
 
     if (this.desiredState.pixelFormat) {
-      let pixelFormat = this.desiredState.pixelFormat;
+      let targetPixelFormat = this.desiredState.pixelFormat;
       if (this.desiredState.pixelFormat.name === PixelFormats.NV12) {
-        pixelFormat = this.desiredState.pixelFormat.unwrap();
+        targetPixelFormat = this.desiredState.pixelFormat.unwrap();
       }
 
-      let pixelFormatToDownload = pixelFormat;
+      let pixelFormatToDownload = targetPixelFormat;
 
       let hasQsvFilter = some(
         this.videoInputSource.filterSteps,
@@ -349,12 +346,14 @@ export class QsvPipelineBuilder extends SoftwarePipelineBuilder {
         let needsConversion = false;
         if (currentPixelFormat.name === PixelFormats.NV12) {
           needsConversion =
-            currentPixelFormat.unwrap().name !== pixelFormat.name;
+            currentPixelFormat.unwrap().name !== targetPixelFormat.name;
           if (!needsConversion) {
-            currentState = currentState.update({ pixelFormat });
+            currentState = currentState.update({
+              pixelFormat: targetPixelFormat,
+            });
           }
         } else {
-          needsConversion = currentPixelFormat.name !== pixelFormat.name;
+          needsConversion = currentPixelFormat.name !== targetPixelFormat.name;
         }
 
         if (needsConversion) {
@@ -406,13 +405,17 @@ export class QsvPipelineBuilder extends SoftwarePipelineBuilder {
         steps.push(hwDownloadFilter);
       }
 
-      if (currentState.pixelFormat?.name !== pixelFormat.name) {
-        // TODO: Handle color params
-        this.pipelineSteps.push(new PixelFormatOutputOption(pixelFormat));
+      if (
+        this.ffmpegState.encoderHwAccelMode === HardwareAccelerationMode.Qsv &&
+        currentState.frameDataLocation === FrameDataLocation.Software
+      ) {
+        steps.push(new HardwareUploadQsvFilter(64));
       }
 
-      // if (this.ffmpegState.outputFormat.type === OutputFormatTypes.Nut) {
-      // }
+      if (currentState.pixelFormat?.name !== targetPixelFormat.name) {
+        // TODO: Handle color params
+        this.pipelineSteps.push(new PixelFormatOutputOption(targetPixelFormat));
+      }
 
       this.context.filterChain.pixelFormatFilterSteps = steps;
     }

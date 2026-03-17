@@ -1,12 +1,11 @@
 import { FilterOption } from '@/ffmpeg/builder/filter/FilterOption.js';
 import type { PixelFormat } from '@/ffmpeg/builder/format/PixelFormat.js';
 import type { FrameState } from '@/ffmpeg/builder/state/FrameState.js';
-import type { FrameSize } from '@/ffmpeg/builder/types.js';
+import { type FrameSize } from '@/ffmpeg/builder/types.js';
 import type { Watermark } from '@tunarr/types';
 
 export class OverlayWatermarkFilter extends FilterOption {
   public readonly affectsFrameState: boolean = true;
-  public filter: string;
 
   constructor(
     protected watermark: Watermark,
@@ -16,7 +15,6 @@ export class OverlayWatermarkFilter extends FilterOption {
     private outputPixelFormat: PixelFormat,
   ) {
     super();
-    this.filter = this.generateFilter();
   }
 
   nextState(currentState: FrameState): FrameState {
@@ -51,7 +49,7 @@ export class OverlayWatermarkFilter extends FilterOption {
     return position;
   }
 
-  private generateFilter() {
+  public get filter(): string {
     const enablePart =
       this.watermark.duration > 0
         ? `:enable='between(t,0,${this.watermark.duration})'`
