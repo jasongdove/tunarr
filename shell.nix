@@ -1,5 +1,20 @@
 { pkgs ? import <nixpkgs> {} }:
 
+let
+  linuxFFmpeg = pkgs.stdenv.mkDerivation {
+    name = "linux-ffmpeg-7.1.1";
+    src = pkgs.fetchurl {
+      url = "https://github.com/ErsatzTV/ErsatzTV-ffmpeg/releases/download/7.1.1/ffmpeg-n7.1.1-56-gc2184b65d2-linux64-gpl-7.1.tar.xz";
+      sha256 = "sha256-/+JhogmWKZZCMQON1CgOzGQLnOzCNiU+5GLVpSMsPKw=";
+    };
+    installPhase = ''
+      mkdir -p $out/bin
+      find . -name 'ffmpeg' -executable -type f -exec cp {} $out/bin/ \;
+      find . -name 'ffprobe' -executable -type f -exec cp {} $out/bin/ \;
+    '';
+  };
+in
+
 pkgs.mkShell {
   buildInputs = with pkgs; [
     nodejs_22
@@ -10,11 +25,12 @@ pkgs.mkShell {
     python3
 
     sqlite
-    ffmpeg
     git
     curl
     jq
-  ];
+  ]
+  ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ linuxFFmpeg ]
+  ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.ffmpeg_7 ];
 
   shellHook = ''
     echo "Tunarr dev environment"
