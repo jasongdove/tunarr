@@ -9,6 +9,7 @@ import { head } from 'lodash-es';
 import NodeCache from 'node-cache';
 import { StrictOmit } from 'ts-essentials';
 import { v4 } from 'uuid';
+import { SearchClause } from '../../../shared/dist/src/util/searchUtil.js';
 import {
   MeilisearchService,
   ProgramSearchDocument,
@@ -226,21 +227,28 @@ export class SmartCollectionsDB {
       );
     }
 
-    const clause = await this.mu.runExclusive(() => {
-      this.searchParser.reset();
-      this.searchParser.input = tokenized.tokens;
-      return this.searchParser.searchExpression();
-    });
+    const clauseResult: Result<SearchClause> = await this.mu.runExclusive(
+      () => {
+        this.searchParser.reset();
+        this.searchParser.input = tokenized.tokens;
+        const clause = this.searchParser.searchExpression();
+        if (this.searchParser.errors.length > 0) {
+          return Result.forError(
+            new Error(
+              `Could not parse search query from smart collection. \n${this.searchParser.errors.map((err) => err.message).join('\n')}. Original string: ${queryString}`,
+            ),
+          );
+        }
 
-    if (this.searchParser.errors.length > 0) {
-      return Result.forError(
-        new Error(
-          `Could not parse search query when creating smart collection. \n${this.searchParser.errors.map((err) => err.message).join('\n')}`,
-        ),
-      );
+        return Result.success(clause);
+      },
+    );
+
+    if (clauseResult.isFailure()) {
+      return clauseResult.recast();
     }
 
-    const request = search.parsedSearchToRequest(clause);
+    const request = search.parsedSearchToRequest(clauseResult.get());
 
     SmartCollectionsDB.cache.set(queryString, request);
 
