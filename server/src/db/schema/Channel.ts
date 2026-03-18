@@ -31,6 +31,7 @@ export const Channel = sqliteTable(
     updatedAt: integer(),
     disableFillerOverlay: integer({ mode: 'boolean' }).default(false),
     duration: integer().notNull(),
+    // millis
     fillerRepeatCooldown: integer(),
     groupTitle: text(),
     guideFlexTitle: text(),

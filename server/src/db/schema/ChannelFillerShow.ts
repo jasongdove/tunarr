@@ -19,6 +19,7 @@ export const ChannelFillerShow = sqliteTable(
     fillerShowUuid: text()
       .notNull()
       .references(() => FillerShow.uuid, { onDelete: 'cascade' }),
+    // seconds
     cooldown: integer().notNull(),
     weight: integer().notNull(),
   },

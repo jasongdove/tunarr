@@ -257,29 +257,31 @@ export class StreamProgramCalculator {
       const channelUuid = channel.uuid;
       const playedAt = new Date(req.startTime);
 
-      this.programPlayHistoryDB
-        .isProgramCurrentlyPlaying(channelUuid, programUuid, req.startTime)
-        .then((isCurrentlyPlaying) => {
-          if (!isCurrentlyPlaying) {
-            return this.programPlayHistoryDB.create({
-              programUuid,
-              channelUuid,
-              playedAt,
-              playedDuration: streamDuration,
-              fillerListId,
-            });
-          }
-          return;
-        })
-        .catch((err) => {
-          this.logger.error(
-            err,
-            'Failed to record play history for program %s on channel %s (filler list id = %s)',
+      try {
+        const isCurrentlyPlaying =
+          await this.programPlayHistoryDB.isProgramCurrentlyPlaying(
+            channelUuid,
+            programUuid,
+            req.startTime,
+          );
+        if (!isCurrentlyPlaying) {
+          await this.programPlayHistoryDB.create({
             programUuid,
             channelUuid,
-            fillerListId ?? 'null',
-          );
-        });
+            playedAt,
+            playedDuration: streamDuration,
+            fillerListId,
+          });
+        }
+      } catch (err) {
+        this.logger.error(
+          err,
+          'Failed to record play history for program %s on channel %s (filler list id = %s)',
+          programUuid,
+          channelUuid,
+          fillerListId ?? 'null',
+        );
+      }
     }
 
     if (
@@ -545,7 +547,6 @@ export class StreamProgramCalculator {
       //don't display the offline screen for longer than 10 minutes. Maybe the
       //channel's admin might change the schedule during that time and then
       //it would be better to start playing the content.
-      console.log('hitting this case ', streamDuration);
       return {
         type: 'offline',
         streamDuration,

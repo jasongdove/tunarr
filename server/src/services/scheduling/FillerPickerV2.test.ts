@@ -205,7 +205,7 @@ describe('FillerPickerV2', () => {
     it('skips filler list when still in cooldown period', async () => {
       const now = Date.now();
       const programUuid = v4();
-      const filler = createFiller({ cooldown: 60000 }); // 1 minute cooldown
+      const filler = createFiller({ cooldown: 60 }); // 1 minute cooldown (in seconds)
       filler.fillerContent = [createProgram({ uuid: programUuid })];
 
       // Played 30 seconds ago (still in cooldown)
@@ -228,7 +228,7 @@ describe('FillerPickerV2', () => {
     it('selects filler when cooldown has expired', async () => {
       const now = Date.now();
       const programUuid = v4();
-      const filler = createFiller({ cooldown: 60000 }); // 1 minute list cooldown
+      const filler = createFiller({ cooldown: 60 }); // 1 minute list cooldown (in seconds)
       filler.fillerContent = [createProgram({ uuid: programUuid })];
 
       // Played 45 minutes ago - exceeds both list cooldown (1 min) AND
@@ -250,7 +250,9 @@ describe('FillerPickerV2', () => {
     });
 
     it('treats never-played filler as having OneDayMillis time since played', async () => {
-      const filler = createFiller({ cooldown: OneDayMillis + 1 }); // Cooldown longer than default "never played" time
+      const filler = createFiller({
+        cooldown: Math.floor(OneDayMillis / 1000) + 1, // Just over 1 day cooldown (in seconds)
+      }); // Cooldown longer than default "never played" time
 
       // No play history
       vi.mocked(mockPlayHistoryDB.getFillerHistory).mockResolvedValue([]);
@@ -267,7 +269,7 @@ describe('FillerPickerV2', () => {
       const now = Date.now();
 
       // First filler in cooldown
-      const filler1 = createFiller({ weight: 50, cooldown: 60000 });
+      const filler1 = createFiller({ weight: 50, cooldown: 60 }); // 1 minute in seconds
       // Second filler not in cooldown
       const filler2 = createFiller({ weight: 50, cooldown: 0 });
 
@@ -321,6 +323,128 @@ describe('FillerPickerV2', () => {
       // Should break after first filler is selected
       // One call for list selection, one for program selection
       expect(boolCallCount).toBeLessThanOrEqual(2);
+    });
+  });
+
+  // ==========================================
+  // PER-FILLER-LIST COOLDOWN UNIT CONVERSION TESTS
+  // ==========================================
+  // Regression: cooldown is stored in seconds in the DB, but timeSincePlayedFiller
+  // is in milliseconds. The comparison must multiply cooldown by 1000.
+
+  describe('per-filler-list cooldown unit conversion', () => {
+    it('blocks a filler list whose seconds-based cooldown has not yet elapsed', async () => {
+      // cooldown = 5 seconds; list last played 3 seconds ago
+      // Bug: 3000ms >= 5 (seconds) → true → incorrectly picks
+      // Fix: 3000ms >= 5000ms → false → correctly blocks
+      const now = Date.now();
+      const filler = createFiller({ cooldown: 5 }); // 5 seconds
+      const program = createProgram({ duration: 10000 });
+      filler.fillerContent = [program];
+
+      vi.mocked(mockPlayHistoryDB.getFillerHistory).mockResolvedValue([
+        createPlayHistory(
+          program.uuid,
+          new Date(now - 3000),
+          filler.fillerShowUuid,
+        ),
+      ]);
+      vi.mocked(random.bool).mockReturnValue(true);
+
+      const result = await picker.pickFiller(mockChannel, [filler], 60000, now);
+
+      expect(result.filler).toBeNull();
+    });
+
+    it('allows a filler list once its seconds-based cooldown has elapsed', async () => {
+      // cooldown = 5 seconds; list last played 10 seconds ago (via a different program)
+      // Fix: 10000ms >= 5000ms → true → correctly allows
+      const now = Date.now();
+      const filler = createFiller({ cooldown: 5 }); // 5 seconds
+      const program = createProgram({ duration: 10000 });
+      filler.fillerContent = [program];
+
+      // Record that the filler *list* played 10 seconds ago, but a different program —
+      // so our content program has never been played (repeat cooldown does not apply).
+      vi.mocked(mockPlayHistoryDB.getFillerHistory).mockResolvedValue([
+        createPlayHistory(v4(), new Date(now - 10000), filler.fillerShowUuid),
+      ]);
+      vi.mocked(random.bool).mockReturnValue(true);
+
+      const result = await picker.pickFiller(mockChannel, [filler], 60000, now);
+
+      expect(result.filler).not.toBeNull();
+      expect(result.fillerListId).toBe(filler.fillerShowUuid);
+    });
+
+    it('blocks a filler list with a minutes-long cooldown still in effect', async () => {
+      // cooldown = 300 seconds (5 minutes); list last played 3 minutes ago
+      // Bug: 180000ms >= 300 (seconds) → true → incorrectly picks
+      // Fix: 180000ms >= 300000ms → false → correctly blocks
+      const now = Date.now();
+      const filler = createFiller({ cooldown: 300 }); // 5 minutes in seconds
+      const program = createProgram({ duration: 10000 });
+      filler.fillerContent = [program];
+
+      vi.mocked(mockPlayHistoryDB.getFillerHistory).mockResolvedValue([
+        createPlayHistory(
+          program.uuid,
+          new Date(now - 3 * 60 * 1000), // 3 minutes ago
+          filler.fillerShowUuid,
+        ),
+      ]);
+      vi.mocked(random.bool).mockReturnValue(true);
+
+      const result = await picker.pickFiller(mockChannel, [filler], 60000, now);
+
+      expect(result.filler).toBeNull();
+    });
+
+    it('allows a filler list with a minutes-long cooldown that has fully elapsed', async () => {
+      // cooldown = 300 seconds (5 minutes); list last played 10 minutes ago (via a different program)
+      // Fix: 600000ms >= 300000ms → true → correctly allows
+      const now = Date.now();
+      const filler = createFiller({ cooldown: 300 }); // 5 minutes in seconds
+      const program = createProgram({ duration: 10000 });
+      filler.fillerContent = [program];
+
+      // Record that the filler *list* played 10 minutes ago, but a different program —
+      // so our content program has never been played (repeat cooldown does not apply).
+      vi.mocked(mockPlayHistoryDB.getFillerHistory).mockResolvedValue([
+        createPlayHistory(
+          v4(),
+          new Date(now - 10 * 60 * 1000), // 10 minutes ago
+          filler.fillerShowUuid,
+        ),
+      ]);
+      vi.mocked(random.bool).mockReturnValue(true);
+
+      const result = await picker.pickFiller(mockChannel, [filler], 60000, now);
+
+      expect(result.filler).not.toBeNull();
+      expect(result.fillerListId).toBe(filler.fillerShowUuid);
+    });
+
+    it('handles zero cooldown as always-available', async () => {
+      // cooldown = 0 seconds → fillerCooldownMs = 0 → any timeSince >= 0 → always available
+      // Use a different program UUID in history so program repeat cooldown does not apply.
+      const now = Date.now();
+      const filler = createFiller({ cooldown: 0 });
+      const program = createProgram({ duration: 10000 });
+      filler.fillerContent = [program];
+
+      vi.mocked(mockPlayHistoryDB.getFillerHistory).mockResolvedValue([
+        createPlayHistory(
+          v4(), // different program — content program has never been played
+          new Date(now - 1000), // just 1 second ago
+          filler.fillerShowUuid,
+        ),
+      ]);
+      vi.mocked(random.bool).mockReturnValue(true);
+
+      const result = await picker.pickFiller(mockChannel, [filler], 60000, now);
+
+      expect(result.filler).not.toBeNull();
     });
   });
 
@@ -513,7 +637,7 @@ describe('FillerPickerV2', () => {
     it('calculates minimumWait when filler is in cooldown but has fitting programs', async () => {
       const now = Date.now();
       const programUuid = v4();
-      const filler = createFiller({ cooldown: 60000 }); // 1 minute cooldown
+      const filler = createFiller({ cooldown: 60 }); // 1 minute cooldown (in seconds)
       filler.fillerContent = [
         createProgram({ uuid: programUuid, duration: 10000 }), // Short program
       ];

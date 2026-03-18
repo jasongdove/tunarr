@@ -119,7 +119,8 @@ export class FillerPickerV2 implements IFillerPicker {
             : OneDayMillis;
           // Weights always count, despite cooldowns.
           listWeight += weight;
-          if (timeSincePlayedFiller >= cooldown) {
+          const fillerCooldownMs = cooldown * 1000;
+          if (timeSincePlayedFiller >= fillerCooldownMs) {
             if (this.weightedPick('filler', weight, listWeight)) {
               pickedFiller = filler;
             } else {
@@ -132,7 +133,7 @@ export class FillerPickerV2 implements IFillerPicker {
               filler.fillerShowUuid,
               filler.fillerShow.name,
               timeSincePlayedFiller,
-              cooldown,
+              fillerCooldownMs,
             );
             const timeUntilListIsCandidate = cooldown - timeSincePlayedFiller;
             if (program.duration + timeUntilListIsCandidate <= maxDuration) {
