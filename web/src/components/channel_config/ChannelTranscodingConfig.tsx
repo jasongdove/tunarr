@@ -16,6 +16,7 @@ import {
 import Box from '@mui/material/Box';
 import Grid from '@mui/material/Grid';
 import Typography from '@mui/material/Typography';
+import { isNonEmptyString } from '@tunarr/shared/util';
 import type { ChannelStreamMode, Watermark } from '@tunarr/types';
 import { find, map, range, round } from 'lodash-es';
 import { useMemo, useState } from 'react';
@@ -275,7 +276,11 @@ export default function ChannelTranscodingConfig() {
                         [isRight ? 'right' : 'left']:
                           `${watermark?.horizontalMargin}%`,
                       }}
-                      src={watermarkPath || `${backendUri}/images/tunarr.png`}
+                      src={
+                        [watermarkPath, channel.icon.path].find(
+                          isNonEmptyString,
+                        ) ?? `${backendUri}/images/tunarr.png`
+                      }
                     />
                     {safeTitleIndicatorVisible && (
                       <Box
