@@ -202,24 +202,21 @@ export class HlsPlaylistMutator {
 
     if (!isEmpty(allSegments)) {
       const firstSeg = first(allSegments)!;
-      const index = firstSeg
+      const firstSegIndex = firstSeg
         ? items.findIndex(
             (item): item is PlaylistSegment =>
               item.type === 'segment' && item.equals(firstSeg),
           )
         : -1;
-      // Count only DISC tags before the first selected segment that will NOT
-      // be emitted as tags. A DISC is emitted when its next item is selected;
-      // counting it in the sequence number too would double-count it.
-      for (let i = 0; i < index; i++) {
+      // ALL discontinuities before the first selected segment are folded into
+      // the discontinuity sequence number. They must never be emitted as tags
+      // because there are no selected segments before them — emitting a tag
+      // would create an empty leading period which confuses clients like Kodi
+      // (inputstream.adaptive maps each discontinuity to a "period" and
+      // errors with "No segments in the manifest" when a period is empty).
+      for (let i = 0; i < firstSegIndex; i++) {
         if (items[i]!.type === 'discontinuity') {
-          const next = items[i + 1];
-          const nextIsSelected =
-            next?.type === 'segment' &&
-            allSegments.some((seg) => seg.equals(next));
-          if (!nextIsSelected) {
-            discontinuitySequence++;
-          }
+          discontinuitySequence++;
         }
       }
     }
@@ -233,10 +230,21 @@ export class HlsPlaylistMutator {
       '#EXT-X-INDEPENDENT-SEGMENTS',
     ];
 
+    // Track whether we've emitted at least one selected segment.
+    // A DISC tag is only emitted when it separates two groups of selected
+    // segments — never before the first selected segment (that case is
+    // handled above by incrementing discontinuitySequence).
+    let hasEmittedSegment = false;
+
     for (let i = 0; i < items.length; i++) {
       const item = items[i]!;
       switch (item.type) {
         case 'discontinuity': {
+          if (!hasEmittedSegment) {
+            // Before the first selected segment — already counted in
+            // discontinuitySequence above, do not emit a tag.
+            break;
+          }
           const next = items[i + 1];
           const nextIsSelected =
             next?.type === 'segment' &&
@@ -255,6 +263,7 @@ export class HlsPlaylistMutator {
               )}`,
             );
             lines.push(item.line);
+            hasEmittedSegment = true;
           }
           break;
       }

@@ -536,14 +536,16 @@ describe('HlsPlaylistMutator', () => {
       expect(discTagCount(result.playlist)).toBe(1);
     });
 
-    it('DISC immediately before first selected segment: disc-seq=0, DISC tag emitted (no double-count)', () => {
+    it('DISC immediately before first selected segment: folded into disc-seq, no tag emitted', () => {
       // minSeg = max(41-10, 0) = 31 → filtered segs 31..60 (30 >= 20) → take first 20 = segs 31..50
-      // DISC is immediately before seg31 (first selected segment)
-      // OLD (buggy) behaviour: disc-seq=1 AND DISC tag emitted → Kodi sees 2 discontinuities
-      // NEW (fixed) behaviour: disc-seq=0, DISC tag emitted → consistent with previous poll
+      // DISC is immediately before seg31 (first selected segment).
+      // Since there are no selected segments BEFORE the DISC, it must NOT be
+      // emitted as a tag (that would create an empty leading period which
+      // breaks Kodi's inputstream.adaptive). Instead it is folded into the
+      // discontinuity sequence number.
       const result = trimWithSegmentFilter(41);
-      expect(discSeq(result.playlist)).toBe(0);
-      expect(discTagCount(result.playlist)).toBe(1);
+      expect(discSeq(result.playlist)).toBe(1);
+      expect(discTagCount(result.playlist)).toBe(0);
     });
 
     it('DISC before window with a gap: disc-seq=1, DISC tag NOT emitted', () => {
@@ -556,8 +558,8 @@ describe('HlsPlaylistMutator', () => {
 
     it('disc-seq is monotonically non-decreasing as the DISC rolls off the window', () => {
       // Simulates three consecutive playlist polls as the client advances
-      const poll1 = trimWithSegmentFilter(25); // DISC in middle
-      const poll2 = trimWithSegmentFilter(41); // DISC at boundary (first selected)
+      const poll1 = trimWithSegmentFilter(25); // DISC in middle of window
+      const poll2 = trimWithSegmentFilter(41); // DISC before first selected (no segs before it)
       const poll3 = trimWithSegmentFilter(45); // DISC before window with gap
 
       const seq1 = discSeq(poll1.playlist);
@@ -565,13 +567,13 @@ describe('HlsPlaylistMutator', () => {
       const seq3 = discSeq(poll3.playlist);
 
       expect(seq1).toBe(0);
-      expect(seq2).toBe(0); // key assertion: must NOT jump to 1 here
+      expect(seq2).toBe(1); // DISC folded into disc-seq (no selected segs before it)
       expect(seq3).toBe(1);
       expect(seq2).toBeGreaterThanOrEqual(seq1);
       expect(seq3).toBeGreaterThanOrEqual(seq2);
     });
 
-    it('multiple DISCs: pre-window one counted, boundary one emitted but not counted', () => {
+    it('multiple DISCs: all before first selected segment are folded into disc-seq', () => {
       // Three programs:
       //   prog1: segs 0–14  (15 segs)
       //   DISC1
@@ -610,8 +612,8 @@ describe('HlsPlaylistMutator', () => {
       }
 
       // minSeg = max(40-10, 0) = 30 → filtered segs 30..60 (31 >= 20) → take first 20 = segs 30..49
-      // DISC1: next item after it is seg15, not in window [30..49] → counted in disc-seq (+1)
-      // DISC2: next item after it is seg30, IS in window → emitted, not counted
+      // Both DISC1 and DISC2 are before the first selected segment (seg30).
+      // Neither has selected segments before it, so both are folded into disc-seq.
       const result = mutator.trimPlaylist(
         start,
         {
@@ -623,8 +625,123 @@ describe('HlsPlaylistMutator', () => {
         { maxSegmentsToKeep: 20 },
       );
 
-      expect(discSeq(result.playlist)).toBe(1); // only DISC1 counted
-      expect(discTagCount(result.playlist)).toBe(1); // only DISC2 emitted
+      expect(discSeq(result.playlist)).toBe(2); // DISC1 + DISC2 both counted
+      expect(discTagCount(result.playlist)).toBe(0); // no tags emitted
+    });
+  });
+
+  describe('Kodi empty period regression', () => {
+    // Reproduces the bug where a DISC tag before the first selected segment
+    // creates an empty leading period, causing Kodi's inputstream.adaptive
+    // to error with "No segments in the manifest".
+    const mutator = new HlsPlaylistMutator();
+    const start = dayjs('2024-10-18T14:00:00.000-0400');
+
+    // Simulates a long-running channel: Program A (675 segments ≈ 45min)
+    // followed by Program B. The sliding window eventually moves past all
+    // of A's segments.
+    function createLongPlaylist(): string[] {
+      const lines = [
+        '#EXTM3U',
+        '#EXT-X-VERSION:3',
+        '#EXT-X-TARGETDURATION:4',
+        '#EXT-X-MEDIA-SEQUENCE:0',
+        '#EXT-X-DISCONTINUITY-SEQUENCE:0',
+      ];
+      // Program A: 50 segments (0-49)
+      for (let i = 0; i < 50; i++) {
+        lines.push(
+          '#EXTINF:4.000000,',
+          `#EXT-X-PROGRAM-DATE-TIME:2024-10-18T14:00:${String(i * 4).padStart(2, '0')}.000-0400`,
+          `/stream/channels/test/hls/data${String(i).padStart(6, '0')}.ts`,
+        );
+      }
+      lines.push('#EXT-X-DISCONTINUITY');
+      // Program B: 30 segments (50-79)
+      for (let i = 50; i < 80; i++) {
+        lines.push(
+          '#EXTINF:4.000000,',
+          `#EXT-X-PROGRAM-DATE-TIME:2024-10-18T14:03:${String((i - 50) * 4).padStart(2, '0')}.000-0400`,
+          `/stream/channels/test/hls/data${String(i).padStart(6, '0')}.ts`,
+        );
+      }
+      return lines;
+    }
+
+    function trim(segmentNumber: number) {
+      return mutator.trimPlaylist(
+        start,
+        {
+          type: 'before_segment_number',
+          segmentNumber,
+          segmentsToKeepBefore: 10,
+        },
+        createLongPlaylist(),
+        { maxSegmentsToKeep: 20 },
+      );
+    }
+
+    function discSeq(playlist: string): number {
+      const m = playlist.match(/#EXT-X-DISCONTINUITY-SEQUENCE:(\d+)/);
+      return m ? parseInt(m[1]!) : -1;
+    }
+
+    function discTagCount(playlist: string): number {
+      return playlist.split('\n').filter((l) => l === '#EXT-X-DISCONTINUITY')
+        .length;
+    }
+
+    function firstSegmentNum(playlist: string): number {
+      const m = playlist.match(/data(\d{6})\.ts/);
+      return m ? parseInt(m[1]!) : -1;
+    }
+
+    it('window spanning the boundary: DISC between selected segments is emitted as tag', () => {
+      // Client at seg 45: window includes both A and B segments
+      const result = trim(45);
+      expect(discSeq(result.playlist)).toBe(0);
+      expect(discTagCount(result.playlist)).toBe(1);
+      expect(result.playlist).toContain('data000049.ts'); // last of A
+      expect(result.playlist).toContain('data000050.ts'); // first of B
+    });
+
+    it('window just past the boundary: DISC folded into disc-seq, NOT emitted as tag', () => {
+      // Client at seg 60: first selected is seg50 (first of B).
+      // The DISC is before seg50 with no selected A segments before it.
+      // CRITICAL: must NOT emit DISC tag (would create empty period 0).
+      const result = trim(60);
+      expect(discSeq(result.playlist)).toBe(1);
+      expect(discTagCount(result.playlist)).toBe(0);
+      expect(firstSegmentNum(result.playlist)).toBe(50);
+    });
+
+    it('window well past the boundary: DISC folded into disc-seq', () => {
+      const result = trim(70);
+      expect(discSeq(result.playlist)).toBe(1);
+      expect(discTagCount(result.playlist)).toBe(0);
+      expect(firstSegmentNum(result.playlist)).toBe(60);
+    });
+
+    it('no empty periods across the full transition', () => {
+      // Simulate the full client progression across the program boundary.
+      // At every point, the first period must have at least one segment.
+      const polls = [40, 45, 50, 55, 60, 65, 70];
+      for (const seg of polls) {
+        const result = trim(seg);
+        const lines = result.playlist.split('\n');
+        const headerEnd = lines.findIndex(
+          (l) => l.startsWith('#EXTINF:') || l === '#EXT-X-DISCONTINUITY',
+        );
+        const firstContentLine = lines[headerEnd];
+
+        if (firstContentLine === '#EXT-X-DISCONTINUITY') {
+          // If there's a leading DISC tag, that means period has no segments
+          throw new Error(
+            `Poll at seg=${seg}: manifest starts with DISC tag, creating empty period. ` +
+              `DISC-SEQ=${discSeq(result.playlist)}`,
+          );
+        }
+      }
     });
   });
 
