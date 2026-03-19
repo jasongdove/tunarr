@@ -12,7 +12,7 @@ jobs:
   typecheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Use Latest Corepack
         run: |
@@ -21,7 +21,7 @@ jobs:
           pnpm --version
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22.13.0
           cache: "pnpm"
@@ -56,7 +56,7 @@ jobs:
             os: ubuntu-24.04-arm
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Docker meta
         id: meta
@@ -93,7 +93,7 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/cache@v4 # Cache previous HEAD SHA
+      - uses: actions/cache@v5 # Cache previous HEAD SHA
         with:
           path: previous_head_sha
           key: ${{ runner.os }}-edge-build-${{ github.sha }}

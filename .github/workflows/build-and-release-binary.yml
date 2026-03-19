@@ -12,7 +12,7 @@ jobs:
   typecheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Use Latest Corepack
         run: |
@@ -21,7 +21,7 @@ jobs:
           pnpm --version
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22.13.0
           cache: "pnpm"
@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4 # Checkout code from repository
+        uses: actions/checkout@v6 # Checkout code from repository
 
       - uses: ilammy/setup-nasm@v1
 
@@ -60,7 +60,7 @@ jobs:
           pnpm --version
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22.13.0
           cache: "pnpm"
@@ -120,7 +120,7 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout
-        uses: actions/checkout@v4 # Checkout code from repository
+        uses: actions/checkout@v6 # Checkout code from repository
 
       - name: Use Latest Corepack
         run: |
@@ -129,7 +129,7 @@ jobs:
           pnpm --version
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22.13.0
           cache: "pnpm"
