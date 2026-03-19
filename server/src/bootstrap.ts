@@ -1,12 +1,18 @@
 import languages from '@cospired/i18n-iso-languages';
 import en from '@cospired/i18n-iso-languages/langs/en.json' with { type: 'json' };
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import type { DeepPartial } from 'ts-essentials';
 import { DBAccess } from './db/DBAccess.ts';
 import type { SettingsFile } from './db/SettingsDB.ts';
 import { SettingsDBFactory } from './db/SettingsDBFactory.ts';
-import { type GlobalOptions, globalOptions } from './globals.js';
+import {
+  type GlobalOptions,
+  globalOptions,
+  setGlobalOptionsUnchecked,
+} from './globals.js';
+import type { GlobalArgsType } from './cli/types.ts';
 import {
   CacheFolderName,
   ChannelLineupsFolderName,
@@ -21,7 +27,7 @@ import { LoggerFactory, RootLogger } from './util/logging/LoggerFactory.js';
  * subdirectories
  * @returns True if an existing database directory was found
  */
-async function initDbDirectories(opts: GlobalOptions) {
+export async function initDbDirectories(opts: GlobalOptions) {
   // Early init, have to use the non-settings-based root Logger
   for (const subpaths of [
     [ChannelLineupsFolderName],
@@ -94,4 +100,36 @@ export async function bootstrapTunarr(
   );
 
   LoggerFactory.initialize(settingsDb);
+}
+
+/**
+ * Lightweight bootstrap for tooling commands (e.g. generate-openapi).
+ * Uses an ephemeral temp directory instead of the configured Tunarr data dir
+ * so the command does not pollute or depend on the user's real data.
+ * Returns the temp directory path so the caller can clean up.
+ */
+export async function bootstrapForTooling(
+  opts: GlobalArgsType,
+): Promise<string> {
+  languages.registerLocale(en);
+
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tunarr-'));
+
+  // Override the database directory with the ephemeral temp dir.
+  // setGlobalOptionsUnchecked bypasses the once() guard since setGlobalOptions
+  // was already called by the middleware before this command handler runs.
+  setGlobalOptionsUnchecked({ ...opts, database: tempDir });
+
+  await initDbDirectories(globalOptions());
+
+  const settingsDb = new SettingsDBFactory(globalOptions()).get();
+  await settingsDb.flush();
+
+  const conn = DBAccess.init();
+  await conn.syncMigrationTablesIfNecessary();
+  await conn.runDBMigrations();
+
+  LoggerFactory.initialize(settingsDb);
+
+  return tempDir;
 }

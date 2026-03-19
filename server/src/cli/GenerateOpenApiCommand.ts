@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { type ArgumentsCamelCase, type CommandModule } from 'yargs';
+import { bootstrapForTooling } from '../bootstrap.ts';
 import { container } from '../container.ts';
 import { setServerOptions } from '../globals.ts';
 import { Server } from '../Server.ts';
@@ -38,6 +39,7 @@ export const GenerateOpenApiCommand: CommandModule<
   },
   handler: async (args: ArgumentsCamelCase<GenerateOpenApiCommandArgs>) => {
     console.log('Generating OpenAPI doc for version ' + args.apiVersion);
+    const tempDir = await bootstrapForTooling(args);
     setServerOptions(args);
     const server = container.get<Server>(Server);
     await server.runServer();
@@ -57,6 +59,7 @@ export const GenerateOpenApiCommand: CommandModule<
     );
     await fs.copyFile(rootOutPath, docsOutPath);
     console.log(`Wrote OpenAPI document to ${rootOutPath}`);
+    await fs.rm(tempDir, { recursive: true, force: true });
     process.exit(0);
   },
 };

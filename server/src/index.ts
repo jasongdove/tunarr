@@ -78,7 +78,12 @@ yargs(hideBin(process.argv))
   .middleware([
     ({ hide_banner }) => (hide_banner ? void 0 : printBanner()),
     (opts) => setGlobalOptions(opts),
-    () => bootstrapTunarr(),
+    (opts) => {
+      if ((opts._ as string[])[0] !== 'generate-openapi') {
+        return bootstrapTunarr();
+      }
+      return Promise.resolve();
+    },
   ])
   .version(getTunarrVersion())
   .command(commands)
