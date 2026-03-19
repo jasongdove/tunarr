@@ -19,7 +19,7 @@ export class PadOpenclFilter extends FilterOption {
       this.preprocessFilters.push(new HardwareUploadVaapiFilter(true));
     }
 
-    const pad = `hwmap=derive_device=opencl,w=${this.paddedSize.width}:h=${this.paddedSize.height}:x=-1:y=-1:color=black`;
+    const pad = `hwmap=derive_device=opencl,pad_opencl=w=${this.paddedSize.width}:h=${this.paddedSize.height}:x=-1:y=-1:color=black`;
 
     return this.preprocessFilters
       .map((filter) => filter.filter)
