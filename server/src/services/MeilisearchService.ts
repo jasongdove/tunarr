@@ -1335,10 +1335,10 @@ export class MeilisearchService implements ISearchService {
     while (task.status === 'enqueued' || task.status === 'processing') {
       switch (task.status) {
         case 'enqueued':
-          this.logger.info('Task %d is enqueued', id);
+          this.logger.debug('Task %d is enqueued', id);
           break;
         case 'processing':
-          this.logger.info('Task %d is still processing...', id);
+          this.logger.debug('Task %d is still processing...', id);
           break;
       }
 
