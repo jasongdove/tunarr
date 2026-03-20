@@ -391,8 +391,7 @@ export class FfmpegStreamFactory extends IFFMPEG {
       // Check if audio and video are coming from same location
       audioDuration:
         streamMode === 'hls_direct' ? null : duration.asMilliseconds(),
-      normalizeLoudness: false, // !!this.transcodeConfig.audioLoudnormConfig,
-      // loudnormConfig: this.transcodeConfig.audioLoudnormConfig,
+      loudnormConfig: this.transcodeConfig.audioLoudnormConfig,
     });
 
     let audioInput: AudioInputSource;
